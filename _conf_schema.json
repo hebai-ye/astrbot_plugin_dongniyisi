@@ -190,9 +190,50 @@
         "default": true
       },
       "stt_provider_id": {
-        "description": "STT Provider（留空用默认）",
+        "description": "STT Provider（留空用默认，仅在 stt_mode=provider/auto 时作为回退）",
         "type": "string",
         "default": ""
+      },
+      "stt_mode": {
+        "description": "语音转写来源：auto=本地优先失败回退Provider / local=只用本地 / provider=只用 AstrBot Provider / off=不转写",
+        "type": "string",
+        "default": "auto",
+        "options": ["auto", "local", "provider", "off"]
+      },
+      "stt_python": {
+        "description": "本地 STT worker 用的 python.exe（留空自动探测 D:\\DeepSeekQQ\\python\\python.exe）",
+        "type": "string",
+        "default": ""
+      },
+      "stt_model_dir": {
+        "description": "本地 STT 模型目录（Qwen3-ASR-0.6B int8，留空=不启用本地 STT）",
+        "type": "string",
+        "default": ""
+      },
+      "stt_worker": {
+        "description": "worker 脚本路径（留空用插件自带 scripts/stt_worker.py）",
+        "type": "string",
+        "default": ""
+      },
+      "stt_num_threads": {
+        "description": "本地 STT 解码线程数",
+        "type": "int",
+        "default": 4
+      },
+      "stt_max_new_tokens": {
+        "description": "本地 STT 单次最大生成 token（Qwen3-ASR 建议 ≥512，否则长音频会被截断）",
+        "type": "int",
+        "default": 512
+      },
+      "stt_hotwords": {
+        "description": "热词（逗号分隔，可塞梗词：栓Q,绝绝子,yyds）",
+        "type": "string",
+        "default": ""
+      },
+      "stt_timeout_sec": {
+        "description": "单次转写超时（秒，Qwen3-ASR 较慢，建议 600）",
+        "type": "int",
+        "default": 600
       },
       "learn_reply": {
         "description": "收到视频时是否先回一句「我看看」",

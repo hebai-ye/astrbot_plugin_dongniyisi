@@ -47,8 +47,33 @@
 3. **注入**：把很短的一段「这句怎么理解 + 相关梗 + 这次怎么回 + 注意事项」追加进 system_prompt，
    带 `【懂你意思·内部参考】` 标记，并要求模型不要复述这段；不覆盖其它插件注入的内容。
 4. **视频学习**：收到视频消息 → 后台抽帧（≤8 张）+ 抽 16k 单声道音频 →
-   视觉模型描述画面、STT 转写人声 → 文本模型输出「梗候选 + 人设候选 JSON」→ 入库候选 →
-   QQ 里回一句「整理好了，用 /待审核 查看」。
+   视觉模型描述画面、语音转写人声（默认本地 Qwen3-ASR）→ 文本模型输出「梗候选 + 人设候选 JSON」→
+   入库候选 → QQ 里回一句「整理好了，用 /待审核 查看」。
+
+## 本地语音转写（Qwen3-ASR-0.6B int8）
+
+视频里的人声默认用**本地模型**转写，不额外花钱、也不怕第三方 STT 抽风：
+
+- 运行时：`sherpa-onnx` + Qwen3-ASR-0.6B int8（30 语种 + 22 种中文方言，带 BGM 的歌曲也能转）。
+- 架构：插件主进程只做调度，**转写跑在常驻 worker 子进程**（`scripts/stt_worker.py`，JSON-Lines IPC），
+  解码崩溃/卡死不会带崩 AstrBot，可自动重启；同一时刻只跑一个任务。
+- 配置（`video` 节）：
+  - `stt_mode`：`auto` 本地优先、失败回退 AstrBot STT Provider（默认）；`local` 只用本地；`provider` 只用 Provider；`off` 不转写
+  - `stt_model_dir`：模型目录（例 `D:\DeepSeekQQ\tools\stt-models\sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25`）
+  - `stt_python`：worker 用的 python（留空自动探测 `D:\DeepSeekQQ\python\python.exe`）
+  - `stt_num_threads`（4）、`stt_max_new_tokens`（512，长音频必须 ≥512）、`stt_timeout_sec`（600）
+- 安装（一次性，在那台机器上）：
+
+```powershell
+# 1) 依赖（装进 AstrBot 用的那个 python 环境即可，worker 复用同一个解释器）
+D:\DeepSeekQQ\python\python.exe -m pip install sherpa-onnx soundfile numpy
+
+# 2) 模型（838MB，解压出约 1GB）
+curl.exe -L -o model.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2
+tar.exe -xf model.tar.bz2 -C D:\DeepSeekQQ\tools\stt-models
+```
+
+- 兜底：若本地方案起不来，`stt_mode=provider` 会退回 AstrBot 的 STT Provider；两者都没有时视频学习只做画面分析。
 
 ## WebUI 管理页
 
@@ -64,6 +89,7 @@
 - `detector.rate_limit_per_min`：识别调用限流（防烧 token）。
 - `learning.auto_learn`：自动收录候选（默认开；不会直接用于聊天，要确认）。
 - `video.max_frames_vision` / `max_per_hour`：视频学习成本与频率上限。
+- `video.stt_mode` / `stt_model_dir` / `stt_python`：本地语音转写（见上一节）。
 - `persona.mode`：`off` 只存不注入 / `reference` 参考表达 / `absorb` 确认后吸收（默认 reference）。
 
 ## 隐私与安全
@@ -95,6 +121,7 @@ python scripts/import_seed.py --db <AstrBot 数据目录>/plugin_data/astrbot_pl
 
 ## 版本
 
+- 0.3.0：视频人声改为**本地 Qwen3-ASR-0.6B int8** 转写（worker 子进程隔离、崩溃自动重启、auto 模式失败回退 Provider）；新增 `stt_local.py` / `scripts/stt_worker.py` 与 `video.stt_*` 配置
 - 0.2.1：修复 ffprobe 路径推导（只需配置 ffmpeg_path）；视频流水线启动时打印实际解析到的 ffmpeg/ffprobe 路径；新增内置梗库种子导入脚本
 - 0.2.0：LLM 结构化识别 + 四模式回梗决策 + 梗库/人设池 + 视频学习（抽帧/转写/提炼）+ 命令 + WebUI 页
 - 0.1.0：骨架

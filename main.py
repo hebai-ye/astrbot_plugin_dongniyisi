@@ -3,7 +3,7 @@
 懂你意思 —— 让 AI 听懂梗、会回梗、能通过视频学习新梗与人设的 AstrBot 插件。
 
 设计稿: 插件设计-梗感MemeSense-v1.md（工作区根目录）
-版本:   0.2.1
+版本:   0.3.0
 
 工作方式（不改 AstrBot / NapCat 任何源码）：
 1. `on_llm_request`（priority=120000）：在主模型请求前识别「梗 / 情绪 / 意图 / 潜台词」，
@@ -32,6 +32,7 @@ from astrbot.core.star.star_tools import StarTools
 from .detector import Detection, MemeDetector, parse_json_object
 from .meme_store import MemeStore
 from .policy import ReplyPolicy, SessionState
+from .stt_local import LocalSTT
 from .video_pipeline import VideoPipeline
 
 PLUGIN_NAME = "astrbot_plugin_dongniyisi"
@@ -82,7 +83,7 @@ VIDEO_ANALYSIS_PROMPT = """视频信息：
     PLUGIN_NAME,
     "鹤梦一白",
     "让 AI 听懂梗、回梗、并通过转发视频学习梗与人设的拟人增强插件",
-    "0.2.1",
+    "0.3.0",
 )
 class MemeSense(Star):
     """懂你意思主类。"""
@@ -95,6 +96,7 @@ class MemeSense(Star):
         self.detector: MemeDetector | None = None
         self.policy: ReplyPolicy | None = None
         self.pipeline: VideoPipeline | None = None
+        self.local_stt: LocalSTT | None = None
         self.sessions: dict[str, SessionState] = {}
         self._video_tasks: set[asyncio.Task] = set()
         self._video_counts: dict[str, list[float]] = {}
@@ -125,6 +127,7 @@ class MemeSense(Star):
             self.policy = ReplyPolicy(dict(self.config))
 
         video = self.config.get("video", {}) or {}
+        self._init_local_stt(video)
         if video.get("enabled", True):
             self.pipeline = VideoPipeline(self.config, self.data_dir)
             self.pipeline.stt_func = self._stt_transcribe
@@ -135,11 +138,16 @@ class MemeSense(Star):
             )
 
         self._register_web_apis()
-        logger.info("[MemeSense] 初始化完成 v0.2.1")
+        logger.info("[MemeSense] 初始化完成 v0.3.0")
 
     async def terminate(self):
         for task in list(self._video_tasks):
             task.cancel()
+        if self.local_stt is not None:
+            try:
+                await self.local_stt.close()
+            except Exception:  # noqa: BLE001
+                pass
         logger.info("[MemeSense] 已卸载")
 
     # ------------------------------------------------------------------ LLM 注入
@@ -737,7 +745,65 @@ class MemeSense(Star):
         except Exception:  # noqa: BLE001
             return None
 
+    def _init_local_stt(self, video: dict) -> None:
+        """按配置初始化本地 STT（Qwen3-ASR worker）。失败不影响其它功能。"""
+        try:
+            mode = str(video.get("stt_mode") or "auto").strip().lower()
+            if mode in ("off", "provider", "disabled"):
+                logger.info("[MemeSense] 本地 STT 未启用（stt_mode=%s）", mode)
+                return
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            python_exe = str(
+                video.get("stt_python")
+                or os.path.join(os.path.dirname(self.data_dir), "..", "..", "..", "python", "python.exe")
+            ).strip()
+            python_exe = os.path.normpath(python_exe) if python_exe else ""
+            model_dir = str(video.get("stt_model_dir") or "").strip()
+            worker = str(video.get("stt_worker") or os.path.join(plugin_dir, "scripts", "stt_worker.py"))
+            local = LocalSTT(
+                python_exe=python_exe,
+                worker_script=worker,
+                model_dir=model_dir,
+                num_threads=int(video.get("stt_num_threads") or 4),
+                max_new_tokens=int(video.get("stt_max_new_tokens") or 512),
+                hotwords=str(video.get("stt_hotwords") or ""),
+                timeout_scale=float(video.get("stt_timeout_scale") or 6.0),
+            )
+            if not local.available():
+                logger.warning(
+                    "[MemeSense] 本地 STT 配置不完整，跳过（python=%s worker=%s model=%s）",
+                    python_exe,
+                    worker,
+                    model_dir,
+                )
+                return
+            self.local_stt = local
+            logger.info(
+                "[MemeSense] 本地 STT 已配置：model=%s threads=%s（首次转写时拉起 worker）",
+                model_dir,
+                local.num_threads,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("[MemeSense] 本地 STT 初始化失败（忽略）", exc_info=True)
+
     async def _stt_transcribe(self, audio_path: str, umo: str = "") -> str:
+        """优先本地 STT，失败/未配置时回退 AstrBot STT Provider。"""
+        video = self.config.get("video", {}) or {}
+        mode = str(video.get("stt_mode") or "auto").strip().lower()
+        if self.local_stt is not None and mode != "provider":
+            try:
+                timeout = max(60.0, float(video.get("stt_timeout_sec") or 600))
+                text = await self.local_stt.transcribe(audio_path, timeout=timeout)
+                logger.info(
+                    "[MemeSense] 本地 STT 完成：%s 字（%s）",
+                    len(text or ""),
+                    mode,
+                )
+                return text
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[MemeSense] 本地 STT 失败，回退 Provider: %s", exc)
+        if mode == "local":
+            return ""
         try:
             stt = await self.context.get_using_stt_provider_async(umo or None)
         except Exception as exc:  # noqa: BLE001

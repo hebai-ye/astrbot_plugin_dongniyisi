@@ -35,6 +35,7 @@ class VideoPipeline:
         self.frame_interval_sec = max(1, int(cfg.get("frame_interval_sec", 4)))
         self.max_frames = max(1, min(24, int(cfg.get("max_frames", 8))))
         self.stt_enabled = bool(cfg.get("stt_enabled", True))
+        self.stt_timeout_sec = max(30, int(cfg.get("stt_timeout_sec", 600)))
         # 由 main.py 注入：async def stt(audio_path: str, umo: str) -> str
         self.stt_func: Callable[[str, str], Awaitable[str]] | None = None
 
@@ -50,7 +51,7 @@ class VideoPipeline:
             transcript = ""
             if audio and self.stt_enabled and self.stt_func is not None:
                 try:
-                    transcript = await asyncio.wait_for(self.stt_func(audio, umo), timeout=240)
+                    transcript = await asyncio.wait_for(self.stt_func(audio, umo), timeout=self.stt_timeout_sec)
                 except Exception as exc:  # noqa: BLE001 - STT 失败不阻断
                     self._log(f"STT 失败: {exc}")
                     transcript = ""
