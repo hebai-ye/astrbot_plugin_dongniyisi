@@ -75,6 +75,17 @@ tar.exe -xf model.tar.bz2 -C D:\DeepSeekQQ\tools\stt-models
 
 - 兜底：若本地方案起不来，`stt_mode=provider` 会退回 AstrBot 的 STT Provider；两者都没有时视频学习只做画面分析。
 
+## 视频短期记忆（追问能答）
+
+看完视频后，插件会在该会话里保留一条「视频记忆」（默认 30 分钟，`video.followup_window_sec`）：
+- 一句话内容概括（`content`）+ 主题关键词、语音转写摘要、画面要点、识别到的梗
+- 记忆持久化到 `plugin_data/astrbot_plugin_dongniyisi/video_memory.json`，重载插件不丢
+- 之后你问「视频里讲了什么 / 你看到了什么 / 帮我总结刚才那个视频」，模型的请求里会自动带上这段事实，
+  不会再回答「我没收到视频」
+
+视觉描述默认优先走 `video.vision_provider_id`（推荐 `deepseek-chat`，非思考模式、支持图片），
+失败时依次尝试 `glm/glm-4v-flash` 与当前会话 Provider。
+
 ## WebUI 管理页
 
 插件自带页面 `pages/memes/index.html`：在 AstrBot 面板「插件 → 懂你意思」的页面入口打开，
@@ -121,6 +132,7 @@ python scripts/import_seed.py --db <AstrBot 数据目录>/plugin_data/astrbot_pl
 
 ## 版本
 
+- 0.3.1：新增**视频短期记忆**（30 分钟内可追问视频内容；持久化 video_memory.json）；`_describe_frames` 视觉 Provider 优先级链（deepseek-chat → glm-4v-flash → 当前会话）；视频分析 JSON 增加 `content/topics`，看完视频的回复会带一句话内容概括
 - 0.3.0：视频人声改为**本地 Qwen3-ASR-0.6B int8** 转写（worker 子进程隔离、崩溃自动重启、auto 模式失败回退 Provider）；新增 `stt_local.py` / `scripts/stt_worker.py` 与 `video.stt_*` 配置
 - 0.2.1：修复 ffprobe 路径推导（只需配置 ffmpeg_path）；视频流水线启动时打印实际解析到的 ffmpeg/ffprobe 路径；新增内置梗库种子导入脚本
 - 0.2.0：LLM 结构化识别 + 四模式回梗决策 + 梗库/人设池 + 视频学习（抽帧/转写/提炼）+ 命令 + WebUI 页

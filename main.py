@@ -3,7 +3,7 @@
 懂你意思 —— 让 AI 听懂梗、会回梗、能通过视频学习新梗与人设的 AstrBot 插件。
 
 设计稿: 插件设计-梗感MemeSense-v1.md（工作区根目录）
-版本:   0.3.0
+版本:   0.3.1
 
 工作方式（不改 AstrBot / NapCat 任何源码）：
 1. `on_llm_request`（priority=120000）：在主模型请求前识别「梗 / 情绪 / 意图 / 潜台词」，
@@ -55,6 +55,8 @@ VIDEO_ANALYSIS_SYSTEM = """你是短视频内容分析助手。你会收到一�
 以及视频中主要人物的人设。只输出一个 JSON 对象，不要输出别的。
 JSON 结构：
 {
+  "content": "一句话概括视频内容（40 字内，必须输出；画面和语音都看不出就写「内容不明确」）",
+  "topics": ["视频主题/场景关键词，最多 5 个"],
   "memes": [
     {"title": "梗名", "surface": "视频里的原话", "meaning": "一句话人话释义",
      "risk": "low", "aliases": ["别名1"]}
@@ -67,7 +69,8 @@ JSON 结构：
     "summary": "人设总结（100 字内）"
   }
 }
-要求：只提取真正有传播性的梗；普通台词不算；没有梗就返回空数组；
+要求：content 必须输出（它会被用来回答用户对视频内容的追问）；
+只提取真正有传播性的梗，普通台词不算；没有梗就返回空数组；
 视频里没有明确人物时 "persona" 返回 null。"""
 
 VIDEO_ANALYSIS_PROMPT = """视频信息：
@@ -83,7 +86,7 @@ VIDEO_ANALYSIS_PROMPT = """视频信息：
     PLUGIN_NAME,
     "鹤梦一白",
     "让 AI 听懂梗、回梗、并通过转发视频学习梗与人设的拟人增强插件",
-    "0.3.0",
+    "0.3.1",
 )
 class MemeSense(Star):
     """懂你意思主类。"""
@@ -100,6 +103,8 @@ class MemeSense(Star):
         self.sessions: dict[str, SessionState] = {}
         self._video_tasks: set[asyncio.Task] = set()
         self._video_counts: dict[str, list[float]] = {}
+        self.video_memory: list[dict] = []
+        self._video_memory_path = ""
 
     # ------------------------------------------------------------------ 生命周期
     async def initialize(self):
@@ -137,8 +142,10 @@ class MemeSense(Star):
                 self.pipeline._ff("ffprobe"),
             )
 
+        self._video_memory_path = os.path.join(self.data_dir, "video_memory.json")
+        self._load_video_memory()
         self._register_web_apis()
-        logger.info("[MemeSense] 初始化完成 v0.3.0")
+        logger.info("[MemeSense] 初始化完成 v0.3.1")
 
     async def terminate(self):
         for task in list(self._video_tasks):
@@ -206,6 +213,9 @@ class MemeSense(Star):
                 logger.warning("[MemeSense] 自动学习入库失败", exc_info=True)
 
         section = self._build_injection(detection, decision, candidates)
+        video_section = self._video_memory_section(umo)
+        if video_section:
+            section = (section + "\n" + video_section) if section else video_section
         if not section:
             return
         max_chars = int(reply_cfg.get("inject_max_chars") or 420)
@@ -323,15 +333,25 @@ class MemeSense(Star):
             transcript = result.get("transcript") or ""
             limit = int(video_cfg.get("max_frames_vision") or 6)
             descriptions = await self._describe_frames(umo, frames[:limit]) if frames else ""
-            analysis = await self._analyze_video(umo, result, descriptions)
-            if not analysis:
-                await self._notify(umo, "视频看完了，但没提炼出可用的梗/人设素材。")
-                return
+            analysis = await self._analyze_video(umo, result, descriptions) or {}
+            content = str(analysis.get("content") or "").strip()
+            self._remember_video(umo, result, descriptions, analysis)
             n_memes, persona_created = self._save_video_learning(umo, analysis, result)
-            parts = [f"视频看完了：整理出 {n_memes} 条梗素材"]
+
+            parts: list[str] = []
+            if content and content != "内容不明确":
+                parts.append(f"视频看完了：{content}")
+            elif result.get("transcript"):
+                parts.append("视频看完了（我听到的是：" + str(result.get("transcript"))[:40] + "…）")
+            else:
+                parts.append("视频看完了")
+            if n_memes:
+                parts.append(f"整理出 {n_memes} 条梗素材")
             if persona_created:
                 parts.append("1 条人物人设候选")
-            parts.append("先存成候选，你确认后我才会用。用 /待审核 查看。")
+            if not n_memes and not persona_created:
+                parts.append("这次没提炼出新梗/人设")
+            parts.append("先用这套视频记忆陪你聊，梗素材确认后我才会拿来用（/待审核 查看）")
             await self._notify(umo, "，".join(parts))
         except asyncio.TimeoutError:
             await self._notify(umo, "视频处理超时了（太长或下载失败），换短一点的试试？")
@@ -347,16 +367,27 @@ class MemeSense(Star):
         if not frames:
             return ""
         video_cfg = self.config.get("video", {}) or {}
-        provider = None
         vis_id = str(video_cfg.get("vision_provider_id") or "").strip()
+        chain: list[str] = []
         if vis_id:
+            chain.append(vis_id)
+        chain += ["deepseek-chat", "glm/glm-4v-flash"]
+        providers = []
+        seen = set()
+        for pid in chain:
+            if pid in seen:
+                continue
+            seen.add(pid)
             try:
-                provider = await self.context.provider_manager.get_provider_by_id(vis_id)
+                p = await self.context.provider_manager.get_provider_by_id(pid)
             except Exception:  # noqa: BLE001
-                provider = None
-        if provider is None:
-            provider = await self._get_provider(umo)
-        if provider is None:
+                p = None
+            if p is not None:
+                providers.append((pid, p))
+        cur = await self._get_provider(umo)
+        if cur is not None:
+            providers.append(("current", cur))
+        if not providers:
             return ""
         uris = []
         for path in frames:
@@ -367,23 +398,28 @@ class MemeSense(Star):
                 continue
         if not uris:
             return ""
-        try:
-            resp = await asyncio.wait_for(
-                provider.text_chat(
-                    prompt=(
-                        "这是一段视频按时间顺序的抽帧。请用 3~6 句中文概括："
-                        "画面内容、出现的人物/角色、字幕或文字、以及可能的梗/表情包元素。"
-                        "不要编造看不清的内容。"
+        for pid, provider in providers:
+            try:
+                resp = await asyncio.wait_for(
+                    provider.text_chat(
+                        prompt=(
+                            "这是一段视频按时间顺序的抽帧。请用 3~6 句中文概括："
+                            "画面内容、出现的人物/角色、字幕或文字、以及可能的梗/表情包元素。"
+                            "不要编造看不清的内容。"
+                        ),
+                        image_urls=uris,
+                        request_max_retries=1,
                     ),
-                    image_urls=uris,
-                    request_max_retries=1,
-                ),
-                timeout=120,
-            )
-            return (getattr(resp, "completion_text", "") or "").strip()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[MemeSense] 视觉描述失败: %s", exc)
-            return ""
+                    timeout=120,
+                )
+                text = (getattr(resp, "completion_text", "") or "").strip()
+                if text:
+                    logger.info("[MemeSense] 视觉描述完成 provider=%s chars=%s", pid, len(text))
+                    return text
+                logger.warning("[MemeSense] 视觉描述为空 provider=%s，尝试下一个", pid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[MemeSense] 视觉描述失败 provider=%s: %s", pid, exc)
+        return ""
 
     async def _analyze_video(self, umo: str, result: dict, frames_desc: str) -> dict | None:
         provider = await self._get_provider(umo)
@@ -446,6 +482,86 @@ class MemeSense(Star):
             umo, count, persona_created,
         )
         return count, persona_created
+
+    # ------------------------------------------------------------------ 视频短期记忆
+    def _load_video_memory(self) -> None:
+        try:
+            if self._video_memory_path and os.path.isfile(self._video_memory_path):
+                with open(self._video_memory_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    self.video_memory = [x for x in data if isinstance(x, dict)][-20:]
+                logger.info("[MemeSense] 视频记忆已加载 %s 条", len(self.video_memory))
+        except Exception:  # noqa: BLE001
+            logger.warning("[MemeSense] 视频记忆加载失败（忽略）", exc_info=True)
+
+    def _save_video_memory(self) -> None:
+        try:
+            if not self._video_memory_path:
+                return
+            tmp = self._video_memory_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.video_memory[-20:], f, ensure_ascii=False)
+            os.replace(tmp, self._video_memory_path)
+        except Exception:  # noqa: BLE001
+            logger.warning("[MemeSense] 视频记忆写入失败（忽略）", exc_info=True)
+
+    def _remember_video(self, umo: str, result: dict, descriptions: str, analysis: dict) -> None:
+        try:
+            video_cfg = self.config.get("video", {}) or {}
+            mem = {
+                "ts": time.time(),
+                "umo": umo,
+                "duration": result.get("duration"),
+                "width": result.get("width"),
+                "height": result.get("height"),
+                "content": str(analysis.get("content") or "")[:120],
+                "topics": list(analysis.get("topics") or [])[:6],
+                "transcript": str(result.get("transcript") or "")[:1500],
+                "frames": str(descriptions or "")[:1500],
+                "memes": [
+                    str(m.get("title") or "")[:30]
+                    for m in (analysis.get("memes") or [])
+                    if isinstance(m, dict)
+                ][:6],
+            }
+            self.video_memory.append(mem)
+            keep = int(video_cfg.get("memory_max") or 10)
+            self.video_memory = self.video_memory[-max(1, keep):]
+            self._save_video_memory()
+            logger.info("[MemeSense] 视频记忆已存 umo=%s content=%s", umo, mem["content"][:40])
+        except Exception:  # noqa: BLE001
+            logger.warning("[MemeSense] 视频记忆保存失败（忽略）", exc_info=True)
+
+    def _video_memory_section(self, umo: str) -> str:
+        """最近一个视频的上下文，用于回答「视频里说了什么」这类追问。"""
+        video_cfg = self.config.get("video", {}) or {}
+        window = int(video_cfg.get("followup_window_sec") or 1800)
+        if window <= 0:
+            return ""
+        now = time.time()
+        mem = None
+        for item in reversed(self.video_memory):
+            if item.get("umo") == umo and now - float(item.get("ts") or 0) <= window:
+                mem = item
+                break
+        if not mem:
+            return ""
+        minutes = max(1, int((now - float(mem.get("ts") or now)) / 60))
+        lines = [f"- 你最近（约 {minutes} 分钟前）刚看完用户发的这个视频：{mem.get('content') or '内容见下'}"]
+        facts = []
+        if mem.get("duration"):
+            facts.append(f"时长约 {round(float(mem['duration']))} 秒")
+        if mem.get("transcript"):
+            facts.append("语音转写：" + str(mem["transcript"])[:220])
+        if mem.get("frames"):
+            facts.append("画面要点：" + str(mem["frames"])[:220])
+        if mem.get("memes"):
+            facts.append("识别到的梗：" + "、".join(mem["memes"][:5]))
+        if facts:
+            lines.append("- 视频事实（用户问起就基于这些回答，不要说你没收到视频）：" + "；".join(facts))
+        lines.append("- 用户若问这个视频里有什么/让你总结，就基于以上内容回答；不要编造没看到的内容。")
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------ 命令
     def _cmd_args(self, event: AstrMessageEvent, names: tuple[str, ...]) -> list[str]:

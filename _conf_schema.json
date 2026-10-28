@@ -180,9 +180,19 @@
         "default": 6
       },
       "vision_provider_id": {
-        "description": "帧描述用的视觉 Provider（留空用当前会话 Provider）",
+        "description": "帧描述用的视觉 Provider（建议 deepseek-chat 或 glm/glm-4v-flash；留空则自动按 deepseek-chat→glm-4v-flash→当前会话 依次尝试）",
         "type": "string",
-        "default": ""
+        "default": "deepseek-chat"
+      },
+      "followup_window_sec": {
+        "description": "视频记忆有效期（秒）：在这段时间内用户追问视频内容，机器人能答（默认 1800 秒）",
+        "type": "int",
+        "default": 1800
+      },
+      "memory_max": {
+        "description": "保留最近几个视频的记忆（按会话）",
+        "type": "int",
+        "default": 10
       },
       "stt_enabled": {
         "description": "是否转写视频语音（需 ffmpeg + STT Provider）",
