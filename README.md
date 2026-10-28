@@ -1,5 +1,9 @@
 # 懂你意思（astrbot_plugin_dongniyisi）
 
+> 仓库：https://github.com/hebai-ye/astrbot_plugin_dongniyisi ｜ 版本 0.2.1
+
+
+
 让 AI **听懂梗、会回梗、能通过视频学习新梗与人设**的 AstrBot 拟人增强插件。
 不改 AstrBot / NapCat 任何源码，走插件公开 API；所有「学到的东西」先入候选库，**确认后才用**。
 
@@ -76,7 +80,21 @@
 - `视频学习入库 umo=... memes=N persona=True/False`
 - `视频学习失败` / `STT 失败` / `视觉描述失败`：失败原因
 
+
+## 内置梗库种子
+
+插件自带 146 条常用中文梗（含 420 条口语示例），位于 `seed/memes_seed.json`。部署后可一键导入：
+
+```bash
+python scripts/import_seed.py --db <AstrBot 数据目录>/plugin_data/astrbot_plugin_dongniyisi/meme_library.db
+```
+
+- 默认写成 `confirmed`（可直接参与回梗）；加 `--status candidate` 则先入库待审。
+- 已存在的同名梗会跳过，不会覆盖你自己编辑过的内容。
+- 导入属于「离线初始化」，导入后到 WebUI 管理页刷新即可看到；建议导入后热重载插件让内存统计同步。
+
 ## 版本
 
+- 0.2.1：修复 ffprobe 路径推导（只需配置 ffmpeg_path）；视频流水线启动时打印实际解析到的 ffmpeg/ffprobe 路径；新增内置梗库种子导入脚本
 - 0.2.0：LLM 结构化识别 + 四模式回梗决策 + 梗库/人设池 + 视频学习（抽帧/转写/提炼）+ 命令 + WebUI 页
 - 0.1.0：骨架

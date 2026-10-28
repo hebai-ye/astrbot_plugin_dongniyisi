@@ -2,7 +2,7 @@ name: astrbot_plugin_dongniyisi # 插件唯一识别名
 display_name: 懂你意思
 desc: 让 AI 听懂梗、会回梗、能通过转发视频学习新梗与人物人设的拟人增强插件
 help: 识别梗与情绪并按概率/硬规则决定接梗方式；视频转发可抽帧+语音转写+提炼梗与人设候选，审核后融入。命令：/懂你意思 /梗库 /找梗 /学梗 /回梗概率 /待审核
-version: 0.2.0
+version: 0.2.1
 author: 鹤梦一白
 repo: https://github.com/hebai-ye/astrbot_plugin_dongniyisi
 astrbot_version: ">=4.11.0"

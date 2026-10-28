@@ -146,6 +146,11 @@
         "type": "string",
         "default": ""
       },
+      "ffprobe_path": {
+        "description": "ffprobe 可执行文件路径（留空则自动从 ffmpeg 同目录推导）",
+        "type": "string",
+        "default": ""
+      },
       "max_mb": {
         "description": "视频大小上限（MB）",
         "type": "int",

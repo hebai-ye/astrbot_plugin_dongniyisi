@@ -3,7 +3,7 @@
 懂你意思 —— 让 AI 听懂梗、会回梗、能通过视频学习新梗与人设的 AstrBot 插件。
 
 设计稿: 插件设计-梗感MemeSense-v1.md（工作区根目录）
-版本:   0.2.0
+版本:   0.2.1
 
 工作方式（不改 AstrBot / NapCat 任何源码）：
 1. `on_llm_request`（priority=120000）：在主模型请求前识别「梗 / 情绪 / 意图 / 潜台词」，
@@ -82,7 +82,7 @@ VIDEO_ANALYSIS_PROMPT = """视频信息：
     PLUGIN_NAME,
     "鹤梦一白",
     "让 AI 听懂梗、回梗、并通过转发视频学习梗与人设的拟人增强插件",
-    "0.2.0",
+    "0.2.1",
 )
 class MemeSense(Star):
     """懂你意思主类。"""
@@ -128,10 +128,14 @@ class MemeSense(Star):
         if video.get("enabled", True):
             self.pipeline = VideoPipeline(self.config, self.data_dir)
             self.pipeline.stt_func = self._stt_transcribe
-            logger.info("[MemeSense] 视频流水线已初始化")
+            logger.info(
+                "[MemeSense] 视频流水线已初始化（ffmpeg=%s, ffprobe=%s）",
+                self.pipeline._ff("ffmpeg"),
+                self.pipeline._ff("ffprobe"),
+            )
 
         self._register_web_apis()
-        logger.info("[MemeSense] 初始化完成 v0.2.0")
+        logger.info("[MemeSense] 初始化完成 v0.2.1")
 
     async def terminate(self):
         for task in list(self._video_tasks):

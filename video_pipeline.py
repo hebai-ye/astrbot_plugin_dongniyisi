@@ -127,12 +127,30 @@ class VideoPipeline:
 
     # ------------------------------------------------------------------ ffmpeg
     def _ff(self, name: str = "ffmpeg") -> str:
+        """查找 ffmpeg/ffprobe 可执行文件。
+
+        优先级：显式配置 → 环境变量 → 从另一个可执行文件所在目录推导 →
+        常见便携目录 → PATH 里的名字。ffmpeg 与 ffprobe 通常同目录，
+        因此只要配置了 ffmpeg_path，ffprobe 就能自动推导出来。
+        """
         configured = self.ffprobe_path if name == "ffprobe" else self.ffmpeg_path
-        if configured:
+        if configured and os.path.isfile(configured):
             return configured
-        env = os.environ.get(name.upper())
-        if env:
-            return env
+
+        for env_name in (name.upper() + "_PATH", name.upper()):
+            env = os.environ.get(env_name)
+            if env and os.path.isfile(env):
+                return env
+
+        # 从已配置的另一个可执行文件推导（ffmpeg 配置了，ffprobe 就在同目录）
+        sibling_base = self.ffmpeg_path if name == "ffprobe" else self.ffprobe_path
+        if sibling_base:
+            base_dir = os.path.dirname(sibling_base)
+            for ext in ("", ".exe"):
+                candidate = os.path.join(base_dir, name + ext)
+                if os.path.isfile(candidate):
+                    return candidate
+
         # 常见便携目录
         for base in (
             os.path.join(self.data_dir, "tools", "ffmpeg", "bin") if self.data_dir else "",
@@ -144,6 +162,8 @@ class VideoPipeline:
                 candidate = os.path.join(base, name + ext)
                 if os.path.isfile(candidate):
                     return candidate
+
+        # 最后交给系统 PATH
         return name
 
     async def _probe(self, src: str) -> dict:
