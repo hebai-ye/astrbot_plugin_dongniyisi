@@ -3,7 +3,7 @@
 懂你意思 —— 让 AI 听懂梗、会回梗、能通过视频学习新梗与人设的 AstrBot 插件。
 
 设计稿: 插件设计-梗感MemeSense-v1.md（工作区根目录）
-版本:   0.3.1
+版本:   0.3.2
 
 工作方式（不改 AstrBot / NapCat 任何源码）：
 1. `on_llm_request`（priority=120000）：在主模型请求前识别「梗 / 情绪 / 意图 / 潜台词」，
@@ -50,6 +50,16 @@ HELP_TEXT = (
     "把视频发给我：我会看画面+听人声，把里面的梗和人物人设整理成候选，等你确认后再用。"
 )
 
+VIDEO_REACTION_SYSTEM = """你是一个有真实情绪、会开玩笑的聊天伙伴。用户刚给你发来一个视频，你已经看完了。
+现在你要发出去的是你的「第一反应」，不是视频内容简介：
+- 用第一人称、口语化，像在微信里随口说话；可以带一点语气词或 emoji（最多 1 个）
+- 必须包含：你真实的感受/情绪（好笑、惊讶、无语、心疼、好奇……），以及你猜用户为什么发给你（求共鸣/求吐槽/分享/试探/想要安慰）
+- 然后给出你的回应：吐槽、接梗、共情、追问或关心，自然合在一两句话里
+- 绝对不要复述视频剧情、画面细节、台词；不要出现「视频里」「这个视频」「我看完了」这类播报式表达
+- 不要解释你在分析，不要分点、不要引号、不要书名号
+- 长度 20~70 字，最多两句
+只输出你要发出去的那句话，不要任何前缀。"""
+
 VIDEO_ANALYSIS_SYSTEM = """你是短视频内容分析助手。你会收到一段视频的时长/分辨率、语音转写文本、
 以及若干抽帧画面的描述。请判断里面是否有「值得学会的网络梗/黑话/名场面」，
 以及视频中主要人物的人设。只输出一个 JSON 对象，不要输出别的。
@@ -86,7 +96,7 @@ VIDEO_ANALYSIS_PROMPT = """视频信息：
     PLUGIN_NAME,
     "鹤梦一白",
     "让 AI 听懂梗、回梗、并通过转发视频学习梗与人设的拟人增强插件",
-    "0.3.1",
+    "0.3.2",
 )
 class MemeSense(Star):
     """懂你意思主类。"""
@@ -145,7 +155,7 @@ class MemeSense(Star):
         self._video_memory_path = os.path.join(self.data_dir, "video_memory.json")
         self._load_video_memory()
         self._register_web_apis()
-        logger.info("[MemeSense] 初始化完成 v0.3.1")
+        logger.info("[MemeSense] 初始化完成 v0.3.2")
 
     async def terminate(self):
         for task in list(self._video_tasks):
@@ -318,7 +328,8 @@ class MemeSense(Star):
             yield event.plain_result("今天视频学得有点多啦，晚点再给我看吧～")
             return
         if video_cfg.get("learn_reply", True):
-            yield event.plain_result("收到视频，我看看画面和声音，可能要一会儿…")
+            ack = str(video_cfg.get("ack_text") or "等我看一下这个视频，马上回来～").strip()
+            yield event.plain_result(ack)
         for comp in videos:
             task = asyncio.create_task(self._learn_video(umo, comp, video_cfg))
             self._video_tasks.add(task)
@@ -338,21 +349,17 @@ class MemeSense(Star):
             self._remember_video(umo, result, descriptions, analysis)
             n_memes, persona_created = self._save_video_learning(umo, analysis, result)
 
-            parts: list[str] = []
-            if content and content != "内容不明确":
-                parts.append(f"视频看完了：{content}")
-            elif result.get("transcript"):
-                parts.append("视频看完了（我听到的是：" + str(result.get("transcript"))[:40] + "…）")
+            # 回复：默认给出「第一反应/感想」，而不是复述视频内容
+            style = str(video_cfg.get("reply_style") or "reaction").strip().lower()
+            reply = ""
+            if style != "summary":
+                reply = await self._generate_reaction(umo, result, analysis)
+            if reply:
+                logger.info("[MemeSense] 视频反应已生成 umo=%s chars=%s", umo, len(reply))
+                await self._notify(umo, reply)
             else:
-                parts.append("视频看完了")
-            if n_memes:
-                parts.append(f"整理出 {n_memes} 条梗素材")
-            if persona_created:
-                parts.append("1 条人物人设候选")
-            if not n_memes and not persona_created:
-                parts.append("这次没提炼出新梗/人设")
-            parts.append("先用这套视频记忆陪你聊，梗素材确认后我才会拿来用（/待审核 查看）")
-            await self._notify(umo, "，".join(parts))
+                # 回退：确实无法生成反应时，只给一句最小提示（不复述内容）
+                await self._notify(umo, "这个视频我看了，不过一时没理清该说点啥……你发它是想让我陪你聊聊哪一点？")
         except asyncio.TimeoutError:
             await self._notify(umo, "视频处理超时了（太长或下载失败），换短一点的试试？")
         except Exception as exc:  # noqa: BLE001
@@ -420,6 +427,54 @@ class MemeSense(Star):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[MemeSense] 视觉描述失败 provider=%s: %s", pid, exc)
         return ""
+
+    async def _generate_reaction(self, umo: str, result: dict, analysis: dict) -> str:
+        """看完视频后，生成带情绪、带用户意图推测的第一反应（不复述内容）。"""
+        video_cfg = self.config.get("video", {}) or {}
+        provider = await self._get_provider(umo)
+        if provider is None:
+            return ""
+        content = str(analysis.get("content") or "").strip()
+        topics = "、".join([str(t) for t in (analysis.get("topics") or [])][:5])
+        memes = "、".join([str(m.get("title")) for m in (analysis.get("memes") or [])
+                          if isinstance(m, dict) and m.get("title")][:5])
+        persona_hint = str(video_cfg.get("persona_hint") or "").strip()
+        facts = []
+        if result.get("duration"):
+            facts.append(f"时长约 {round(float(result['duration']))} 秒")
+        if content:
+            facts.append(f"内容概况：{content}")
+        if topics:
+            facts.append(f"主题：{topics}")
+        if result.get("transcript"):
+            facts.append("语音转写摘要：" + str(result.get("transcript"))[:400])
+        if result.get("frames"):
+            facts.append("画面要点：" + str(result.get("frames"))[:500])
+        if memes:
+            facts.append(f"识别到的梗：{memes}")
+        if persona_hint:
+            facts.append(f"你的人设提示：{persona_hint}")
+        prompt = "你刚看完用户发来的视频，这些是你看到/听到的事实（仅供你理解，不要在回复里复述）：\n" + "\n".join(facts)
+        prompt += "\n\n现在发你的第一反应（感受+猜测用户为什么发+你的回应）。"
+        try:
+            resp = await asyncio.wait_for(
+                provider.text_chat(
+                    prompt=prompt,
+                    system_prompt=VIDEO_REACTION_SYSTEM,
+                    contexts=[],
+                    request_max_retries=1,
+                ),
+                timeout=90,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[MemeSense] 视频反应生成失败: %s", exc)
+            return ""
+        text = (getattr(resp, "completion_text", "") or "").strip()
+        text = text.replace("\n", " ").replace("“", "").replace("”", "").replace("「", "").replace("」", "").strip()
+        max_chars = int(video_cfg.get("reaction_max_chars") or 90)
+        if len(text) > max_chars:
+            text = text[:max_chars].rstrip("，。；、 ") + "…"
+        return text
 
     async def _analyze_video(self, umo: str, result: dict, frames_desc: str) -> dict | None:
         provider = await self._get_provider(umo)

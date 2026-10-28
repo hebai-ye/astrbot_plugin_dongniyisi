@@ -179,6 +179,26 @@
         "type": "int",
         "default": 6
       },
+      "reply_style": {
+        "description": "看完视频后的回复风格：reaction=只说自己的感受/猜测/回应（默认，不复述内容）；summary=概括视频内容",
+        "type": "string",
+        "default": "reaction"
+      },
+      "reaction_max_chars": {
+        "description": "视频反应回复的最大字数",
+        "type": "int",
+        "default": 90
+      },
+      "persona_hint": {
+        "description": "生成视频反应时给模型的人设提示（一句话，留空则只用通用口吻）",
+        "type": "string",
+        "default": ""
+      },
+      "ack_text": {
+        "description": "收到视频后的第一句回应（留空用默认）",
+        "type": "string",
+        "default": "等我看一下这个视频，马上回来～"
+      },
       "vision_provider_id": {
         "description": "帧描述用的视觉 Provider（建议 deepseek-chat 或 glm/glm-4v-flash；留空则自动按 deepseek-chat→glm-4v-flash→当前会话 依次尝试）",
         "type": "string",

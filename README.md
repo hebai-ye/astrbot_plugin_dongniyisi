@@ -75,6 +75,15 @@ tar.exe -xf model.tar.bz2 -C D:\DeepSeekQQ\tools\stt-models
 
 - 兜底：若本地方案起不来，`stt_mode=provider` 会退回 AstrBot 的 STT Provider；两者都没有时视频学习只做画面分析。
 
+## 看完视频怎么回（v0.3.2：只给反应，不复述）
+
+默认 `video.reply_style=reaction`：机器人的回复是**它自己的第一反应**——感受/情绪、猜测你为什么发这个视频、以及它想怎么回应（吐槽/接梗/共情/追问），不会复述视频剧情或画面。
+- 想让它概括内容：`video.reply_style=summary`（旧行为）
+- 反应字数上限：`video.reaction_max_chars`（默认 90）
+- 口吻提示：`video.persona_hint`（一句话人设，留空走通用口吻）
+- 收到视频的第一句：`video.ack_text`（默认「等我看一下这个视频，马上回来～」）
+- 视频的**事实**仍然存进视频短期记忆（见下节），所以之后你追问「刚才那个视频讲了什么」它照样答得出来，只是主动回复时不说这些。
+
 ## 视频短期记忆（追问能答）
 
 看完视频后，插件会在该会话里保留一条「视频记忆」（默认 30 分钟，`video.followup_window_sec`）：
@@ -132,6 +141,7 @@ python scripts/import_seed.py --db <AstrBot 数据目录>/plugin_data/astrbot_pl
 
 ## 版本
 
+- 0.3.2：看完视频的回复改为「第一反应/感想/对用户意图的猜测」，默认不再复述视频内容（`reply_style=reaction`，保留 `summary` 旧行为）；新增 `reaction_max_chars / persona_hint / ack_text`；事实仍写入视频短期记忆，追问可答
 - 0.3.1：新增**视频短期记忆**（30 分钟内可追问视频内容；持久化 video_memory.json）；`_describe_frames` 视觉 Provider 优先级链（deepseek-chat → glm-4v-flash → 当前会话）；视频分析 JSON 增加 `content/topics`，看完视频的回复会带一句话内容概括
 - 0.3.0：视频人声改为**本地 Qwen3-ASR-0.6B int8** 转写（worker 子进程隔离、崩溃自动重启、auto 模式失败回退 Provider）；新增 `stt_local.py` / `scripts/stt_worker.py` 与 `video.stt_*` 配置
 - 0.2.1：修复 ffprobe 路径推导（只需配置 ffmpeg_path）；视频流水线启动时打印实际解析到的 ffmpeg/ffprobe 路径；新增内置梗库种子导入脚本
