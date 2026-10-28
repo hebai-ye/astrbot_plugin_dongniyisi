@@ -3,7 +3,7 @@
 懂你意思 —— 让 AI 听懂梗、会回梗、能通过视频学习新梗与人设的 AstrBot 插件。
 
 设计稿: 插件设计-梗感MemeSense-v1.md（工作区根目录）
-版本:   0.3.2
+版本:   0.3.3
 
 工作方式（不改 AstrBot / NapCat 任何源码）：
 1. `on_llm_request`（priority=120000）：在主模型请求前识别「梗 / 情绪 / 意图 / 潜台词」，
@@ -34,6 +34,7 @@ from .meme_store import MemeStore
 from .policy import ReplyPolicy, SessionState
 from .stt_local import LocalSTT
 from .video_pipeline import VideoPipeline
+from .link_pipeline import LinkVideoPipeline, LinkVideoError
 
 PLUGIN_NAME = "astrbot_plugin_dongniyisi"
 INJECT_MARKER = "\n\n【懂你意思·内部参考（仅供你参考，不要向用户复述本段）】\n"
@@ -85,6 +86,7 @@ JSON 结构：
 
 VIDEO_ANALYSIS_PROMPT = """视频信息：
 - 时长：{duration} 秒；分辨率：{width}x{height}
+- 来源信息：{meta}
 - 语音转写：{transcript}
 - 画面描述：
 {frames}
@@ -92,11 +94,23 @@ VIDEO_ANALYSIS_PROMPT = """视频信息：
 请按要求的 JSON 输出。"""
 
 
+class _SimpleVideo:
+    """把本地视频路径伪装成 AstrBot 视频组件（供 pipeline 复用）。"""
+
+    type = "Video"
+
+    def __init__(self, path: str, url: str = ""):
+        self.file = ""
+        self.path = path
+        self.url = url
+        self.cover = ""
+
+
 @register(
     PLUGIN_NAME,
     "鹤梦一白",
     "让 AI 听懂梗、回梗、并通过转发视频学习梗与人设的拟人增强插件",
-    "0.3.2",
+    "0.3.3",
 )
 class MemeSense(Star):
     """懂你意思主类。"""
@@ -109,6 +123,7 @@ class MemeSense(Star):
         self.detector: MemeDetector | None = None
         self.policy: ReplyPolicy | None = None
         self.pipeline: VideoPipeline | None = None
+        self.link: LinkVideoPipeline | None = None
         self.local_stt: LocalSTT | None = None
         self.sessions: dict[str, SessionState] = {}
         self._video_tasks: set[asyncio.Task] = set()
@@ -151,11 +166,20 @@ class MemeSense(Star):
                 self.pipeline._ff("ffmpeg"),
                 self.pipeline._ff("ffprobe"),
             )
+        link_cfg = self.config.get("link_video", {}) or {}
+        if link_cfg.get("enabled", True):
+            try:
+                self.link = LinkVideoPipeline(link_cfg, self.data_dir)
+                det = self.link._detect_ytdlp()
+                logger.info("[MemeSense] 视频链接已启用（yt-dlp=%s, quality=%s, max_duration=%s）",
+                            det, self.link.quality, self.link.max_duration)
+            except Exception:  # noqa: BLE001
+                logger.warning("[MemeSense] 视频链接初始化失败（忽略）", exc_info=True)
 
         self._video_memory_path = os.path.join(self.data_dir, "video_memory.json")
         self._load_video_memory()
         self._register_web_apis()
-        logger.info("[MemeSense] 初始化完成 v0.3.2")
+        logger.info("[MemeSense] 初始化完成 v0.3.3")
 
     async def terminate(self):
         for task in list(self._video_tasks):
@@ -321,7 +345,14 @@ class MemeSense(Star):
         if not video_cfg.get("enabled", True) or not self.pipeline:
             return
         videos = [c for c in event.message_obj.message if self._is_video(c)]
-        if not videos:
+        links: list[str] = []
+        link_cfg = self.config.get("link_video", {}) or {}
+        if self.link and link_cfg.get("enabled", True):
+            try:
+                links = self.link.extract_urls(event.message_str or "")
+            except Exception:  # noqa: BLE001
+                links = []
+        if not videos and not links:
             return
         umo = event.unified_msg_origin
         if not self._video_quota_ok(umo, video_cfg):
@@ -334,32 +365,17 @@ class MemeSense(Star):
             task = asyncio.create_task(self._learn_video(umo, comp, video_cfg))
             self._video_tasks.add(task)
             task.add_done_callback(self._video_tasks.discard)
+        for url in links[:2]:
+            task = asyncio.create_task(self._learn_link(umo, url, video_cfg, link_cfg))
+            self._video_tasks.add(task)
+            task.add_done_callback(self._video_tasks.discard)
 
     async def _learn_video(self, umo: str, comp: Any, video_cfg: dict):
         workdir = ""
         try:
             result = await asyncio.wait_for(self.pipeline.process(comp, umo), timeout=300)
             workdir = result.get("workdir") or ""
-            frames = result.get("frames") or []
-            transcript = result.get("transcript") or ""
-            limit = int(video_cfg.get("max_frames_vision") or 6)
-            descriptions = await self._describe_frames(umo, frames[:limit]) if frames else ""
-            analysis = await self._analyze_video(umo, result, descriptions) or {}
-            content = str(analysis.get("content") or "").strip()
-            self._remember_video(umo, result, descriptions, analysis)
-            n_memes, persona_created = self._save_video_learning(umo, analysis, result)
-
-            # 回复：默认给出「第一反应/感想」，而不是复述视频内容
-            style = str(video_cfg.get("reply_style") or "reaction").strip().lower()
-            reply = ""
-            if style != "summary":
-                reply = await self._generate_reaction(umo, result, analysis)
-            if reply:
-                logger.info("[MemeSense] 视频反应已生成 umo=%s chars=%s", umo, len(reply))
-                await self._notify(umo, reply)
-            else:
-                # 回退：确实无法生成反应时，只给一句最小提示（不复述内容）
-                await self._notify(umo, "这个视频我看了，不过一时没理清该说点啥……你发它是想让我陪你聊聊哪一点？")
+            await self._finish_video(umo, result, video_cfg)
         except asyncio.TimeoutError:
             await self._notify(umo, "视频处理超时了（太长或下载失败），换短一点的试试？")
         except Exception as exc:  # noqa: BLE001
@@ -368,6 +384,57 @@ class MemeSense(Star):
         finally:
             if workdir:
                 VideoPipeline.cleanup(workdir)
+
+    async def _learn_link(self, umo: str, url: str, video_cfg: dict, link_cfg: dict):
+        """用户发来视频链接：解析 -> 下载 -> 走同一套抽帧/转写/分析/反应流程。"""
+        workdir = ""
+        try:
+            prepared = await asyncio.wait_for(self.link.prepare(url, on_status=None),
+                                             timeout=self.link.timeout + 120)
+            workdir = prepared.get("workdir") or ""
+            result = await asyncio.wait_for(
+                self.pipeline.process(_SimpleVideo(prepared["path"], url), umo), timeout=300)
+            result["workdir"] = ""  # 由本函数统一清理
+            meta = prepared.get("meta") or {}
+            result["meta"] = meta
+            if prepared.get("subtitle"):
+                result["subtitle"] = prepared["subtitle"]
+            logger.info("[MemeSense] 链接视频已下载 umo=%s site=%s title=%s bytes=%s",
+                        umo, meta.get("site"), str(meta.get("title"))[:40],
+                        os.path.getsize(prepared["path"]) if os.path.isfile(prepared["path"]) else 0)
+            await self._finish_video(umo, result, video_cfg)
+        except asyncio.TimeoutError:
+            await self._notify(umo, "这个视频链接处理超时了，换个短一点的试试？")
+        except LinkVideoError as exc:
+            await self._notify(umo, f"这个链接没看成功：{str(exc)[:120]}")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[MemeSense] 链接视频处理失败: %s", exc, exc_info=True)
+            await self._notify(umo, f"这个链接没看成功：{str(exc)[:80]}")
+        finally:
+            if workdir:
+                LinkVideoPipeline.cleanup(workdir)
+
+    async def _finish_video(self, umo: str, result: dict, video_cfg: dict):
+        """抽帧描述 -> 分析 -> 视频记忆 -> 学习入库 -> 生成第一反应。"""
+        frames = result.get("frames") or []
+        limit = int(video_cfg.get("max_frames_vision") or 6)
+        descriptions = await self._describe_frames(umo, frames[:limit]) if frames else ""
+        meta = result.get("meta") or {}
+        analysis = await self._analyze_video(umo, result, descriptions, meta) or {}
+        self._remember_video(umo, result, descriptions, analysis, meta)
+        self._save_video_learning(umo, analysis, result)
+
+        # 回复：默认给出「第一反应/感想」，而不是复述视频内容
+        style = str(video_cfg.get("reply_style") or "reaction").strip().lower()
+        reply = ""
+        if style != "summary":
+            reply = await self._generate_reaction(umo, result, analysis)
+        if reply:
+            logger.info("[MemeSense] 视频反应已生成 umo=%s chars=%s", umo, len(reply))
+            await self._notify(umo, reply)
+        else:
+            # 回退：只给一句最小提示（不复述内容）
+            await self._notify(umo, "这个视频我看了，不过一时没理清该说点啥……你发它是想让我陪你聊聊哪一点？")
 
     async def _describe_frames(self, umo: str, frames: list[str]) -> str:
         """用支持视觉的 Provider 描述抽帧画面。"""
@@ -446,8 +513,15 @@ class MemeSense(Star):
             facts.append(f"内容概况：{content}")
         if topics:
             facts.append(f"主题：{topics}")
+        meta = result.get("meta") or {}
+        if meta.get("title"):
+            facts.append(f"视频标题：{meta.get('title')}（作者：{meta.get('author') or '未知'}）")
+        if meta.get("description"):
+            facts.append("简介：" + str(meta.get("description"))[:300])
         if result.get("transcript"):
             facts.append("语音转写摘要：" + str(result.get("transcript"))[:400])
+        if result.get("subtitle"):
+            facts.append("字幕摘要：" + str(result.get("subtitle"))[:300])
         if result.get("frames"):
             facts.append("画面要点：" + str(result.get("frames"))[:500])
         if memes:
@@ -476,15 +550,36 @@ class MemeSense(Star):
             text = text[:max_chars].rstrip("，。；、 ") + "…"
         return text
 
-    async def _analyze_video(self, umo: str, result: dict, frames_desc: str) -> dict | None:
+    async def _analyze_video(self, umo: str, result: dict, frames_desc: str,
+                             meta: dict | None = None) -> dict | None:
         provider = await self._get_provider(umo)
         if provider is None:
             return None
+        meta = meta or result.get("meta") or {}
+        meta_text = ""
+        if meta:
+            bits = []
+            if meta.get("title"):
+                bits.append(f"标题：{meta['title']}")
+            if meta.get("author"):
+                bits.append(f"UP主/作者：{meta['author']}")
+            if meta.get("tags"):
+                bits.append("标签：" + "、".join([str(t) for t in meta["tags"]][:8]))
+            if meta.get("description"):
+                bits.append(f"简介：{str(meta['description'])[:300]}")
+            if meta.get("page_url"):
+                bits.append(f"链接：{meta['page_url']}")
+            meta_text = "；".join(bits) or "（无）"
+        transcript = result.get("transcript") or ""
+        subtitle = result.get("subtitle") or ""
+        if not transcript and subtitle:
+            transcript = "（视频字幕）" + str(subtitle)[:2000]
         prompt = VIDEO_ANALYSIS_PROMPT.format(
             duration=result.get("duration") or "未知",
             width=result.get("width") or "未知",
             height=result.get("height") or "未知",
-            transcript=(result.get("transcript") or "（无语音转写）")[:3000],
+            meta=meta_text or "（无）",
+            transcript=(transcript or "（无语音转写）")[:3000],
             frames=frames_desc or "（无画面描述）",
         )
         try:
@@ -561,12 +656,17 @@ class MemeSense(Star):
         except Exception:  # noqa: BLE001
             logger.warning("[MemeSense] 视频记忆写入失败（忽略）", exc_info=True)
 
-    def _remember_video(self, umo: str, result: dict, descriptions: str, analysis: dict) -> None:
+    def _remember_video(self, umo: str, result: dict, descriptions: str,
+                        analysis: dict, meta: dict | None = None) -> None:
         try:
             video_cfg = self.config.get("video", {}) or {}
+            meta = meta or result.get("meta") or {}
             mem = {
                 "ts": time.time(),
                 "umo": umo,
+                "title": str(meta.get("title") or "")[:80],
+                "author": str(meta.get("author") or "")[:40],
+                "url": str(meta.get("page_url") or "")[:200],
                 "duration": result.get("duration"),
                 "width": result.get("width"),
                 "height": result.get("height"),
@@ -603,7 +703,9 @@ class MemeSense(Star):
         if not mem:
             return ""
         minutes = max(1, int((now - float(mem.get("ts") or now)) / 60))
-        lines = [f"- 你最近（约 {minutes} 分钟前）刚看完用户发的这个视频：{mem.get('content') or '内容见下'}"]
+        title = str(mem.get("title") or "").strip()
+        head = f"《{title}》" if title else "那个视频"
+        lines = [f"- 你最近（约 {minutes} 分钟前）刚看完用户发的{head}：{mem.get('content') or '内容见下'}"]
         facts = []
         if mem.get("duration"):
             facts.append(f"时长约 {round(float(mem['duration']))} 秒")

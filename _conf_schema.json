@@ -132,6 +132,62 @@
       }
     }
   },
+  "link_video": {
+    "description": "视频链接（B站/YouTube/抖音等）：发链接给机器人，它会打开观看",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "是否支持视频链接",
+        "type": "bool",
+        "default": true
+      },
+      "quality": {
+        "description": "下载清晰度上限（480 最稳，B站免登录一般只能到 480 以下）",
+        "type": "int",
+        "default": 480
+      },
+      "max_duration_sec": {
+        "description": "单个视频最长时长（秒），超过不下载",
+        "type": "int",
+        "default": 900
+      },
+      "max_filesize_mb": {
+        "description": "下载体积上限（MB）",
+        "type": "int",
+        "default": 200
+      },
+      "timeout_sec": {
+        "description": "下载超时（秒）",
+        "type": "int",
+        "default": 240
+      },
+      "fetch_subtitle": {
+        "description": "是否抓取视频字幕（B站字幕/YT 字幕）作为转写补充",
+        "type": "bool",
+        "default": true
+      },
+      "cookies_file": {
+        "description": "可选：Netscape 格式 cookies.txt 路径（B站高清晰度/YouTube 需要时）",
+        "type": "string",
+        "default": ""
+      },
+      "ytdlp_path": {
+        "description": "yt-dlp 可执行文件路径（留空自动查找 PATH）",
+        "type": "string",
+        "default": ""
+      },
+      "ytdlp_python": {
+        "description": "用哪个 Python 的 `-m yt_dlp` 调用（留空自动探测）",
+        "type": "string",
+        "default": "D:\\DeepSeekQQ\\python\\python.exe"
+      },
+      "allowed_domains": {
+        "description": "允许的站点域名列表",
+        "type": "list",
+        "default": ["bilibili.com", "b23.tv", "youtube.com", "youtu.be", "douyin.com", "v.douyin.com", "kuaishou.com", "v.kuaishou.com", "xiaohongshu.com", "xhslink.com", "weibo.com", "ixigua.com", "acfun.cn"]
+      }
+    }
+  },
   "video": {
     "description": "视频学习",
     "type": "object",

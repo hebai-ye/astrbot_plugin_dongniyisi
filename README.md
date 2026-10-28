@@ -75,6 +75,21 @@ tar.exe -xf model.tar.bz2 -C D:\DeepSeekQQ\tools\stt-models
 
 - 兜底：若本地方案起不来，`stt_mode=provider` 会退回 AstrBot 的 STT Provider；两者都没有时视频学习只做画面分析。
 
+## 视频链接（v0.3.3：发链接就能看）
+
+直接把 **B站 / YouTube / 抖音 / 快手 / 小红书 / 微博 / 西瓜 / A站** 等视频链接发给机器人，它会自己打开看：
+- B站链接优先走官方 API 拿标题/UP主/简介/标签/官方字幕，再用 `yt-dlp` 下载 480p 视频；
+- 其它站点用 `yt-dlp` 解析下载；下载后复用同一套「抽帧 + 本地语音转写 + 分析 + 第一反应」流程；
+- 字幕（B站字幕 / YT 字幕）会作为语音转写缺失时的补充；
+- 视频标题会进视频短期记忆，追问「刚才那个视频讲了什么」能答；
+- 限制可配：`link_video.quality / max_duration_sec / max_filesize_mb / allowed_domains / cookies_file`。
+
+需要 `yt-dlp`：在机器人那台机器上装好后即可（本机已装到 `D:\DeepSeekQQ\python`）：
+```bat
+D:\DeepSeekQQ\python\python.exe -m pip install -U yt-dlp
+```
+B站高清晰度或 YouTube 遇到"需要登录"时，导出 cookies.txt 填到 `link_video.cookies_file` 即可。
+
 ## 看完视频怎么回（v0.3.2：只给反应，不复述）
 
 默认 `video.reply_style=reaction`：机器人的回复是**它自己的第一反应**——感受/情绪、猜测你为什么发这个视频、以及它想怎么回应（吐槽/接梗/共情/追问），不会复述视频剧情或画面。
@@ -141,6 +156,7 @@ python scripts/import_seed.py --db <AstrBot 数据目录>/plugin_data/astrbot_pl
 
 ## 版本
 
+- 0.3.3：新增**视频链接**支持（B站/YouTube/抖音等发链接即可观看：B站 API 元信息+字幕，yt-dlp 下载，复用抽帧/STT/分析/反应流程；标题进视频记忆）
 - 0.3.2：看完视频的回复改为「第一反应/感想/对用户意图的猜测」，默认不再复述视频内容（`reply_style=reaction`，保留 `summary` 旧行为）；新增 `reaction_max_chars / persona_hint / ack_text`；事实仍写入视频短期记忆，追问可答
 - 0.3.1：新增**视频短期记忆**（30 分钟内可追问视频内容；持久化 video_memory.json）；`_describe_frames` 视觉 Provider 优先级链（deepseek-chat → glm-4v-flash → 当前会话）；视频分析 JSON 增加 `content/topics`，看完视频的回复会带一句话内容概括
 - 0.3.0：视频人声改为**本地 Qwen3-ASR-0.6B int8** 转写（worker 子进程隔离、崩溃自动重启、auto 模式失败回退 Provider）；新增 `stt_local.py` / `scripts/stt_worker.py` 与 `video.stt_*` 配置
