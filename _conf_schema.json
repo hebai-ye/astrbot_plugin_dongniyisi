@@ -1,0 +1,248 @@
+{
+  "enabled": {
+    "description": "插件总开关",
+    "type": "bool",
+    "default": true
+  },
+  "detector": {
+    "description": "梗 / 情绪识别（LLM 结构化判断）",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用 LLM 识别（关闭则只用离线启发式）",
+        "type": "bool",
+        "default": true
+      },
+      "cache_seconds": {
+        "description": "同一句话的识别缓存时间（秒）",
+        "type": "int",
+        "default": 300
+      },
+      "rate_limit_per_min": {
+        "description": "每分钟最多识别次数（防止烧 token）",
+        "type": "int",
+        "default": 20,
+        "slider": { "min": 1, "max": 120, "step": 1 }
+      },
+      "timeout_sec": {
+        "description": "识别超时（秒，超时自动回退启发式）",
+        "type": "float",
+        "default": 8.0
+      },
+      "max_tokens": {
+        "description": "识别输出 token 上限",
+        "type": "int",
+        "default": 420
+      },
+      "max_candidates": {
+        "description": "送给识别的梗库候选条数",
+        "type": "int",
+        "default": 12
+      }
+    }
+  },
+  "reply": {
+    "description": "回梗策略",
+    "type": "object",
+    "items": {
+      "proactive": {
+        "description": "是否在 LLM 请求中注入「梗上下文 + 回梗策略」",
+        "type": "bool",
+        "default": true
+      },
+      "base_probability": {
+        "description": "回梗基础概率",
+        "type": "float",
+        "default": 0.3,
+        "slider": { "min": 0.0, "max": 1.0, "step": 0.05 },
+        "hint": "最终概率 = 基础概率 × 情绪系数 × 响应意愿系数 × 近期回梗衰减 × 同梗衰减"
+      },
+      "max_per_10": {
+        "description": "每 10 条消息最多回梗次数",
+        "type": "int",
+        "default": 2,
+        "slider": { "min": 0, "max": 10, "step": 1 }
+      },
+      "cooldown_sec": {
+        "description": "刚回完梗的冷却时间（秒，冷却内概率减半）",
+        "type": "int",
+        "default": 90,
+        "slider": { "min": 0, "max": 600, "step": 10 }
+      },
+      "repeat_decay": {
+        "description": "同一个梗短时间重复的衰减系数",
+        "type": "float",
+        "default": 0.45,
+        "slider": { "min": 0.1, "max": 1.0, "step": 0.05 }
+      },
+      "tease_extra": {
+        "description": "「反向玩梗但不甩梗」的额外概率",
+        "type": "float",
+        "default": 0.12,
+        "slider": { "min": 0.0, "max": 0.5, "step": 0.01 }
+      },
+      "followup_prob": {
+        "description": "「不接梗但追问一句」的概率",
+        "type": "float",
+        "default": 0.25,
+        "slider": { "min": 0.0, "max": 1.0, "step": 0.05 }
+      },
+      "serious_emotions": {
+        "description": "命中这些情绪时不接梗",
+        "type": "list",
+        "default": ["难过", "焦虑", "生气", "严肃", "正经", "求助"],
+        "hint": "逗号分隔；这些是硬规则，优先于概率"
+      },
+      "block_risky": {
+        "description": "高风险梗只理解不模仿",
+        "type": "bool",
+        "default": true
+      },
+      "inject_max_chars": {
+        "description": "注入内容的最大字数",
+        "type": "int",
+        "default": 420,
+        "slider": { "min": 120, "max": 1200, "step": 20 }
+      },
+      "explain_rules": {
+        "description": "在注入段里附带决策依据（调试用，不建议长期开）",
+        "type": "bool",
+        "default": false
+      }
+    }
+  },
+  "learning": {
+    "description": "梗库与自动学习",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用梗库（SQLite）",
+        "type": "bool",
+        "default": true
+      },
+      "auto_learn": {
+        "description": "把识别出的新梗自动记为候选（确认后才用于聊天）",
+        "type": "bool",
+        "default": true
+      },
+      "library_path": {
+        "description": "梗库文件路径（留空默认 data/plugin_data/astrbot_plugin_dongniyisi/meme_library.db）",
+        "type": "string",
+        "default": ""
+      }
+    }
+  },
+  "video": {
+    "description": "视频学习",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用视频学习",
+        "type": "bool",
+        "default": true
+      },
+      "ffmpeg_path": {
+        "description": "ffmpeg 可执行文件路径",
+        "type": "string",
+        "default": ""
+      },
+      "max_mb": {
+        "description": "视频大小上限（MB）",
+        "type": "int",
+        "default": 100,
+        "slider": { "min": 10, "max": 500, "step": 10 }
+      },
+      "max_duration_sec": {
+        "description": "视频时长上限（秒）",
+        "type": "int",
+        "default": 600
+      },
+      "frame_interval_sec": {
+        "description": "抽帧间隔（秒）",
+        "type": "int",
+        "default": 4,
+        "slider": { "min": 1, "max": 15, "step": 1 }
+      },
+      "max_frames": {
+        "description": "最多抽帧数",
+        "type": "int",
+        "default": 8,
+        "slider": { "min": 1, "max": 24, "step": 1 }
+      },
+      "max_frames_vision": {
+        "description": "送给视觉模型的帧数（默认 6）",
+        "type": "int",
+        "default": 6
+      },
+      "vision_provider_id": {
+        "description": "帧描述用的视觉 Provider（留空用当前会话 Provider）",
+        "type": "string",
+        "default": ""
+      },
+      "stt_enabled": {
+        "description": "是否转写视频语音（需 ffmpeg + STT Provider）",
+        "type": "bool",
+        "default": true
+      },
+      "stt_provider_id": {
+        "description": "STT Provider（留空用默认）",
+        "type": "string",
+        "default": ""
+      },
+      "learn_reply": {
+        "description": "收到视频时是否先回一句「我看看」",
+        "type": "bool",
+        "default": true
+      },
+      "max_per_hour": {
+        "description": "每个会话每小时最多处理几个视频",
+        "type": "int",
+        "default": 3
+      }
+    }
+  },
+  "persona": {
+    "description": "人设融合",
+    "type": "object",
+    "items": {
+      "mode": {
+        "description": "视频学到的人设怎么用",
+        "type": "string",
+        "default": "reference",
+        "options": ["off", "reference", "absorb"],
+        "hint": "off=只存不注入；reference=聊到相关角色时注入参考人设；absorb=确认后写入本尊人格"
+      },
+      "absorb_requires_confirm": {
+        "description": "吸收式改写人格前必须由用户确认",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "integration": {
+    "description": "与其它插件的兼容",
+    "type": "object",
+    "items": {
+      "inject_priority": {
+        "description": "on_llm_request 注入优先级（越大越靠后）",
+        "type": "int",
+        "default": 120000
+      },
+      "coexist_with_companion": {
+        "description": "与 private_companion 共存（不覆盖其注入内容）",
+        "type": "bool",
+        "default": true
+      },
+      "group_enabled": {
+        "description": "是否在群聊里也生效",
+        "type": "bool",
+        "default": true
+      },
+      "admin_ids": {
+        "description": "可管理梗库的 QQ 号（逗号分隔，留空则只认 AstrBot 管理员）",
+        "type": "string",
+        "default": "3535085149"
+      }
+    }
+  }
+}

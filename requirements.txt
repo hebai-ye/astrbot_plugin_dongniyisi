@@ -1,0 +1,4 @@
+# 梗感 MemeSense 无额外第三方依赖：
+# - sqlite3 / asyncio / json 为 Python 标准库
+# - aiohttp 由 AstrBot 运行时自带
+# - 视频处理依赖系统 ffmpeg/ffprobe（见 README）

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>懂你意思 · 梗库管理</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f6f7f9; color: #1c1e21; }
+  @media (prefers-color-scheme: dark) { body { background: #16181c; color: #e8eaed; } }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 18px 16px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { opacity: .65; font-size: 13px; margin-bottom: 16px; }
+  .cards { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .card { flex: 1 1 140px; border-radius: 12px; padding: 12px 14px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  @media (prefers-color-scheme: dark) { .card { background: #1f2227; box-shadow: none; } }
+  .card .n { font-size: 22px; font-weight: 700; }
+  .card .k { font-size: 12px; opacity: .6; }
+  .toolbar { display: flex; gap: 8px; margin: 8px 0 12px; flex-wrap: wrap; }
+  input, select, button { font: inherit; border-radius: 8px; border: 1px solid rgba(0,0,0,.15); padding: 6px 10px; background: transparent; color: inherit; }
+  @media (prefers-color-scheme: dark) { input, select, button { border-color: rgba(255,255,255,.2); } }
+  button { cursor: pointer; }
+  button.primary { background: #2f6fed; border-color: #2f6fed; color: #fff; }
+  button.danger { color: #d0332f; border-color: rgba(208,51,47,.4); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid rgba(128,128,128,.2); vertical-align: top; }
+  th { font-size: 12px; opacity: .6; font-weight: 600; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px; background: rgba(128,128,128,.18); }
+  .tag.ok { background: rgba(46,160,67,.18); color: #2ea043; }
+  .tag.no { background: rgba(208,51,47,.15); color: #d0332f; }
+  .muted { opacity: .55; }
+  .row-actions button { padding: 2px 8px; font-size: 12px; margin-right: 4px; }
+  #msg { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: #222c; color: #fff; padding: 8px 14px; border-radius: 999px; font-size: 13px; display: none; }
+  h2 { font-size: 15px; margin: 22px 0 8px; }
+  .empty { opacity: .5; font-size: 13px; padding: 10px 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>懂你意思 · 梗库管理</h1>
+  <div class="sub">梗库、候选审核、人设池。只有确认过的梗才会被用于聊天。</div>
+
+  <div class="cards" id="cards">
+    <div class="card"><div class="n" id="st-total">-</div><div class="k">梗总数</div></div>
+    <div class="card"><div class="n" id="st-confirmed">-</div><div class="k">已确认</div></div>
+    <div class="card"><div class="n" id="st-candidate">-</div><div class="k">候选</div></div>
+    <div class="card"><div class="n" id="st-usages">-</div><div class="k">累计回梗</div></div>
+    <div class="card"><div class="n" id="st-personas">-</div><div class="k">人设池</div></div>
+  </div>
+
+  <div class="toolbar">
+    <input id="kw" placeholder="搜索标题 / 别名 / 释义" style="flex:1 1 220px" />
+    <select id="status">
+      <option value="">全部状态</option>
+      <option value="candidate">候选</option>
+      <option value="confirmed">已确认</option>
+      <option value="rejected">已拒绝</option>
+    </select>
+    <button class="primary" id="btn-search">搜索</button>
+    <button id="btn-refresh">刷新</button>
+  </div>
+
+  <h2>梗库</h2>
+  <table>
+    <thead><tr><th style="width:42px">ID</th><th>标题</th><th>意思 / 用法</th><th style="width:88px">状态</th><th style="width:150px">操作</th></tr></thead>
+    <tbody id="memes"></tbody>
+  </table>
+  <div class="empty" id="memes-empty" style="display:none">还没有梗。发我视频，或教我一句 /学梗。</div>
+
+  <h2>人设池（视频学习中的人物）</h2>
+  <table>
+    <thead><tr><th style="width:42px">ID</th><th>名称</th><th>标签 / 风格</th><th style="width:88px">状态</th><th style="width:150px">操作</th></tr></thead>
+    <tbody id="personas"></tbody>
+  </table>
+  <div class="empty" id="personas-empty" style="display:none">还没有人设素材。</div>
+</div>
+<div id="msg"></div>
+
+<script>
+(function () {
+  const BASES = [
+    '/api/plug/astrbot_plugin_dongniyisi',
+    '/api/plug/memes',
+  ];
+  let base = BASES[0];
+
+  function toast(text, ms) {
+    const el = document.getElementById('msg');
+    el.textContent = text; el.style.display = 'block';
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { el.style.display = 'none'; }, ms || 2200);
+  }
+
+  async function tryFetch(path, opts) {
+    const candidates = base ? [base] : BASES;
+    let lastErr = null;
+    for (const b of candidates) {
+      try {
+        const res = await fetch(b + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+        if (res.status === 404) { lastErr = new Error('404'); continue; }
+        if (!res.ok) { lastErr = new Error('HTTP ' + res.status); continue; }
+        const data = await res.json().catch(() => null);
+        if (data && data.ok === false) throw new Error(data.error || '接口返回失败');
+        base = b;
+        return data;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('请求失败');
+  }
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  function statusTag(s) {
+    if (s === 'confirmed') return '<span class="tag ok">已确认</span>';
+    if (s === 'rejected') return '<span class="tag no">已拒绝</span>';
+    return '<span class="tag">候选</span>';
+  }
+
+  async function loadStats() {
+    try {
+      const d = await tryFetch('/stats');
+      const s = (d && d.stats) || {};
+      document.getElementById('st-total').textContent = s.total ?? 0;
+      document.getElementById('st-confirmed').textContent = s.confirmed ?? 0;
+      document.getElementById('st-candidate').textContent = s.candidate ?? 0;
+      document.getElementById('st-usages').textContent = s.usages ?? 0;
+      document.getElementById('st-personas').textContent = d.personas ?? 0;
+    } catch (e) { /* 面板未登录或接口路径不同 */ }
+  }
+
+  async function loadMemes() {
+    const kw = document.getElementById('kw').value.trim();
+    const status = document.getElementById('status').value;
+    const qs = '?limit=100' + (kw ? '&keyword=' + encodeURIComponent(kw) : '') + (status ? '&status=' + status : '');
+    try {
+      const d = await tryFetch('/memes/list' + qs);
+      const items = (d && d.items) || [];
+      const tbody = document.getElementById('memes');
+      document.getElementById('memes-empty').style.display = items.length ? 'none' : 'block';
+      tbody.innerHTML = items.map(m => `
+        <tr data-id="${m.id}">
+          <td class="muted">${m.id}</td>
+          <td>${esc(m.title)}${m.aliases ? '<div class="muted">' + esc(m.aliases) + '</div>' : ''}</td>
+          <td>${esc((m.meaning || '').slice(0, 120))}${m.usage ? '<div class="muted">用法：' + esc((m.usage || '').slice(0, 80)) + '</div>' : ''}</td>
+          <td>${statusTag(m.status)}</td>
+          <td class="row-actions">
+            ${m.status !== 'confirmed' ? '<button data-act="confirm">确认</button>' : ''}
+            ${m.status !== 'rejected' ? '<button data-act="reject">拒绝</button>' : ''}
+            <button class="danger" data-act="delete">删除</button>
+          </td>
+        </tr>`).join('');
+    } catch (e) {
+      toast('读取梗库失败：' + e.message + '（请在 AstrBot 面板内打开本页）', 4000);
+    }
+  }
+
+  async function loadPersonas() {
+    try {
+      const d = await tryFetch('/personas/list?limit=100');
+      const items = (d && d.items) || [];
+      const tbody = document.getElementById('personas');
+      document.getElementById('personas-empty').style.display = items.length ? 'none' : 'block';
+      tbody.innerHTML = items.map(p => `
+        <tr data-id="${p.id}">
+          <td class="muted">${p.id}</td>
+          <td>${esc(p.name)}</td>
+          <td>${esc((p.summary || '').slice(0, 100))}<div class="muted">${esc(p.speech_style || '')}</div></td>
+          <td>${statusTag(p.status)}</td>
+          <td class="row-actions">
+            ${p.status !== 'confirmed' ? '<button data-act="confirm">确认</button>' : ''}
+            ${p.status !== 'rejected' ? '<button data-act="reject">拒绝</button>' : ''}
+          </td>
+        </tr>`).join('');
+    } catch (e) { /* ignore */ }
+  }
+
+  document.getElementById('memes').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('button[data-act]');
+    if (!btn) return;
+    const tr = btn.closest('tr');
+    const id = tr && tr.getAttribute('data-id');
+    const act = btn.getAttribute('data-act');
+    try {
+      if (act === 'delete') {
+        if (!confirm('删掉这条梗？')) return;
+        await tryFetch('/memes/delete', { method: 'POST', body: JSON.stringify({ id: Number(id) }) });
+      } else {
+        await tryFetch('/memes/review', { method: 'POST', body: JSON.stringify({ id: Number(id), action: act }) });
+      }
+      toast('已' + ({ confirm: '确认', reject: '拒绝', delete: '删除' })[act]);
+      loadMemes(); loadStats();
+    } catch (e) { toast('操作失败：' + e.message, 3000); }
+  });
+
+  document.getElementById('personas').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('button[data-act]');
+    if (!btn) return;
+    const tr = btn.closest('tr');
+    const id = tr && tr.getAttribute('data-id');
+    try {
+      await tryFetch('/personas/review', { method: 'POST', body: JSON.stringify({ id: Number(id), action: btn.getAttribute('data-act') }) });
+      toast('已更新');
+      loadPersonas(); loadStats();
+    } catch (e) { toast('操作失败：' + e.message, 3000); }
+  });
+
+  document.getElementById('btn-search').addEventListener('click', loadMemes);
+  document.getElementById('btn-refresh').addEventListener('click', () => { loadStats(); loadMemes(); loadPersonas(); });
+  document.getElementById('kw').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadMemes(); });
+  loadStats(); loadMemes(); loadPersonas();
+})();
+</script>
+</body>
+</html>
